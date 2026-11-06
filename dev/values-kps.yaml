@@ -1,0 +1,52 @@
+# kube-prometheus-stack en DEV: solo Prometheus (agente), kube-state-metrics y
+# node-exporter. Sin Grafana ni Alertmanager: todo se mira en shared.
+# helm upgrade --install kps prometheus-community/kube-prometheus-stack \
+#   --kube-context dev -n observability --create-namespace --version <VER> \
+#   -f dev/values-kps.yaml --set prometheus.prometheusSpec.remoteWrite[0].url=http://$PROM_NLB:9090/api/v1/write
+fullnameOverride: kps
+
+grafana:
+  enabled: false
+alertmanager:
+  enabled: false
+
+# Etiquetas de nodo que kube-state-metrics expone en kube_node_labels (por defecto ninguna).
+# Las usa el panel "Nodos por tipo de capacidad" del dashboard demo-app.
+kube-state-metrics:
+  metricLabelsAllowlist:
+    - nodes=[karpenter.sh/capacity-type,karpenter.sh/nodepool,node.kubernetes.io/instance-type,kubernetes.io/arch]
+
+kubeControllerManager:
+  enabled: false
+kubeScheduler:
+  enabled: false
+kubeEtcd:
+  enabled: false
+kubeProxy:
+  enabled: false
+
+prometheus-node-exporter:
+  tolerations:
+    - operator: Exists
+
+prometheus:
+  prometheusSpec:
+    scrapeInterval: 15s # kubelet/cAdvisor (CPU y memoria) al ritmo de la app; la demo necesita respuesta rápida
+    evaluationInterval: 15s
+    externalLabels:
+      cluster: dev # con esta etiqueta llegan todas las series a shared
+    retention: 6h # buffer local; la retención real está en shared
+    remoteWrite:
+      - url: "http://PROM_NLB_PLACEHOLDER:9090/api/v1/write" # se sobreescribe con --set
+        queueConfig:
+          maxSamplesPerSend: 5000
+          capacity: 20000
+    # Scrapear cualquier ServiceMonitor/PodMonitor del cluster (demo-app)
+    serviceMonitorSelectorNilUsesHelmValues: false
+    podMonitorSelectorNilUsesHelmValues: false
+    resources:
+      requests:
+        cpu: 200m
+        memory: 1Gi
+      limits:
+        memory: 2Gi

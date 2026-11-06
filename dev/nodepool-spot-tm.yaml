@@ -1,0 +1,43 @@
+# Movimiento 1 de la demo: NodePool propio de Auto Mode con Spot, familias t y m,
+# arm64 (Graviton) y amd64. Usa la NodeClass `default` que trae Auto Mode.
+# kubectl --context dev apply -f dev/nodepool-spot-tm.yaml
+# Fuente: https://docs.aws.amazon.com/eks/latest/userguide/create-node-pool.html
+apiVersion: karpenter.sh/v1
+kind: NodePool
+metadata:
+  name: spot-tm
+spec:
+  weight: 100 # preferido frente a los integrados (system) y a cronjob
+  template:
+    metadata:
+      labels:
+        charla/nodepool: spot-tm
+    spec:
+      nodeClassRef:
+        group: eks.amazonaws.com
+        kind: NodeClass
+        name: default
+      requirements:
+        - key: karpenter.sh/capacity-type
+          operator: In
+          values: ["spot"]
+        - key: eks.amazonaws.com/instance-category
+          operator: In
+          values: ["t", "m"] # si Auto Mode no ofrece "t" en la región, dejar solo "m"
+        - key: kubernetes.io/arch
+          operator: In
+          values: ["arm64", "amd64"]
+        - key: eks.amazonaws.com/instance-generation
+          operator: Gt
+          values: ["4"]
+        - key: eks.amazonaws.com/instance-cpu
+          operator: In
+          values: ["2", "4"] # nodos chicos: se ve mejor el bin packing
+  disruption:
+    consolidationPolicy: WhenEmptyOrUnderutilized
+    consolidateAfter: 30s # agresivo a propósito: la demo dura 8 minutos
+    budgets:
+      - nodes: "50%" # en prod sería 10 % y con ventanas horarias
+  limits:
+    cpu: "16"
+    memory: 32Gi

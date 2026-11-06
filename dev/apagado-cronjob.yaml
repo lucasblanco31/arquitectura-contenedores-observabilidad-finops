@@ -1,0 +1,184 @@
+# Movimiento 2 de la demo: apagado fuera de horario con dos CronJobs que trabajan
+# sobre los NODOS, no sobre la app:
+#   apagar-dev  · 22:00 UTC (19:00 AR) todos los días: pone el taint
+#                 apagado=true:NoExecute en el NodePool spot-tm (para que Auto Mode
+#                 no cree nodos nuevos) y en sus nodos actuales. Los pods se
+#                 expulsan, quedan Pending, los nodos vacíos se consolidan y mueren.
+#   prender-dev · 11:00 UTC (08:00 AR) de lunes a viernes: quita el taint. Los pods
+#                 Pending vuelven a programarse y Auto Mode levanta nodos Spot.
+#                 Corre en el NodePool `cronjob` (dev/nodepool-cronjob.yaml), el
+#                 único con nodos posibles cuando todo está apagado.
+# Los dos van con suspend: true (son de ejemplo). En la demo se dispara a mano:
+#   kubectl --context dev -n demo create job apagar-ahora --from=cronjob/apagar-dev
+# Logs en Loki: {cluster="dev", namespace="demo", container="apagador"}
+# Fuente taints: https://kubernetes.io/docs/concepts/scheduling-eviction/taint-and-toleration/
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: apagador
+  namespace: demo
+---
+# Nodos y NodePools son recursos de cluster: hace falta ClusterRole.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: apagador-nodos
+rules:
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "list", "patch", "update"]
+  - apiGroups: ["karpenter.sh"]
+    resources: ["nodepools"]
+    verbs: ["get", "list", "patch", "update"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: apagador-nodos
+subjects:
+  - kind: ServiceAccount
+    name: apagador
+    namespace: demo
+roleRef:
+  kind: ClusterRole
+  name: apagador-nodos
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: apagador-scripts
+  namespace: demo
+data:
+  apagar.sh: |
+    #!/bin/sh
+    set -e
+    POOL=${NODEPOOL:-spot-tm}
+    # 1. El NodePool deja de ser elegible: todo nodo nuevo nacería con el taint,
+    #    y como ningún pod lo tolera, Auto Mode directamente no crea nodos.
+    kubectl patch nodepool "$POOL" --type=merge \
+      -p '{"spec":{"template":{"spec":{"taints":[{"key":"apagado","value":"true","effect":"NoExecute"}]}}}}' >/dev/null
+    echo "{\"level\":\"info\",\"accion\":\"apagar\",\"objeto\":\"nodepool/$POOL\",\"msg\":\"taint apagado=true:NoExecute en el template: no se crean nodos nuevos\"}"
+    # 2. Los nodos actuales: NoExecute expulsa los pods que no lo toleran.
+    #    Tres pasadas con 15 s entre medio: un nodo que Auto Mode ya estaba
+    #    lanzando nace sin el taint y hay que alcanzarlo cuando se registra.
+    for pasada in 1 2 3; do
+      for node in $(kubectl get nodes -l karpenter.sh/nodepool="$POOL" -o jsonpath='{.items[*].metadata.name}'); do
+        if ! kubectl get node "$node" -o jsonpath='{.spec.taints[*].key}' | grep -q apagado; then
+          kubectl taint nodes "$node" apagado=true:NoExecute --overwrite >/dev/null
+          echo "{\"level\":\"info\",\"accion\":\"apagar\",\"objeto\":\"node/$node\",\"pasada\":$pasada,\"msg\":\"taint NoExecute: pods expulsados, el nodo queda vacío y Auto Mode lo elimina\"}"
+        fi
+      done
+      [ "$pasada" = 3 ] || sleep 15
+    done
+  prender.sh: |
+    #!/bin/sh
+    set -e
+    POOL=${NODEPOOL:-spot-tm}
+    kubectl patch nodepool "$POOL" --type=merge -p '{"spec":{"template":{"spec":{"taints":[]}}}}' >/dev/null
+    echo "{\"level\":\"info\",\"accion\":\"prender\",\"objeto\":\"nodepool/$POOL\",\"msg\":\"taint quitado del template: los pods Pending se programan y Auto Mode levanta nodos\"}"
+    for node in $(kubectl get nodes -l karpenter.sh/nodepool="$POOL" -o jsonpath='{.items[*].metadata.name}'); do
+      kubectl taint nodes "$node" apagado- >/dev/null 2>&1 || true
+      echo "{\"level\":\"info\",\"accion\":\"prender\",\"objeto\":\"node/$node\",\"msg\":\"taint quitado\"}"
+    done
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: apagar-dev
+  namespace: demo
+spec:
+  schedule: "0 22 * * *" # 19:00 America/Argentina/Buenos_Aires
+  suspend: true # de ejemplo: no se ejecuta solo; en la demo se dispara con `kubectl create job --from=cronjob/apagar-dev`
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      template:
+        metadata:
+          labels:
+            app: apagador
+          annotations:
+            karpenter.sh/do-not-disrupt: "true" # Karpenter no drena el nodo mientras el Job corre (el taint en el template dispara drift)
+        spec:
+          serviceAccountName: apagador
+          restartPolicy: Never
+          # El propio Job tolera el taint que pone: si cae en un nodo Spot, no se expulsa a sí mismo.
+          tolerations:
+            - key: apagado
+              operator: Equal
+              value: "true"
+              effect: NoExecute
+          containers:
+            - name: apagador
+              image: alpine/k8s:1.37.2 # kubectl 1.37, mismo minor que el cluster (bitnami/kubectl ya no publica tags versionados)
+              command: ["/bin/sh", "/scripts/apagar.sh"]
+              env:
+                - name: NODEPOOL
+                  value: spot-tm
+              volumeMounts:
+                - name: scripts
+                  mountPath: /scripts
+              resources:
+                requests:
+                  cpu: 25m
+                  memory: 32Mi
+          volumes:
+            - name: scripts
+              configMap:
+                name: apagador-scripts
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: prender-dev
+  namespace: demo
+spec:
+  schedule: "0 11 * * 1-5" # 08:00 AR, lunes a viernes
+  suspend: true # de ejemplo, ver arriba
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      template:
+        metadata:
+          labels:
+            app: apagador
+          annotations:
+            karpenter.sh/do-not-disrupt: "true" # Karpenter no drena el nodo mientras el Job corre (el taint en el template dispara drift)
+        spec:
+          serviceAccountName: apagador
+          restartPolicy: Never
+          # Cuando dev está apagado no hay nodos: el Job pide el NodePool `cronjob`
+          # (taint cronjob=true:NoSchedule, que solo este Job tolera). Auto Mode le
+          # levanta un nodo chico, corre, y el nodo se va solo.
+          nodeSelector:
+            karpenter.sh/nodepool: cronjob
+          tolerations:
+            - key: cronjob
+              operator: Equal
+              value: "true"
+              effect: NoSchedule
+          containers:
+            - name: apagador
+              image: alpine/k8s:1.37.2
+              command: ["/bin/sh", "/scripts/prender.sh"]
+              env:
+                - name: NODEPOOL
+                  value: spot-tm
+              volumeMounts:
+                - name: scripts
+                  mountPath: /scripts
+              resources:
+                requests:
+                  cpu: 25m
+                  memory: 32Mi
+          volumes:
+            - name: scripts
+              configMap:
+                name: apagador-scripts

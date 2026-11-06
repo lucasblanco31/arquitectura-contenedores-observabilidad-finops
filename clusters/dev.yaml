@@ -1,0 +1,24 @@
+# Cluster DEV · us-east-2 · EKS Auto Mode
+# eksctl create cluster -f clusters/dev.yaml
+apiVersion: eksctl.io/v1alpha5
+kind: ClusterConfig
+metadata:
+  name: dev
+  region: us-east-2
+  version: "1.37"
+  tags:
+    proyecto: charla-eks-finops
+    ambiente: dev
+
+vpc:
+  cidr: 10.1.0.0/16 # disjunto del de shared (10.0.0.0/16) para el peering
+  nat:
+    gateway: Single
+  clusterEndpoints:
+    publicAccess: true
+    privateAccess: true
+  publicAccessCIDRs: ["TU_IP_PUBLICA/32"] # tu IP pública (curl -s https://checkip.amazonaws.com); si cambia: eksctl utils update-cluster-endpoints / aws eks update-cluster-config
+
+autoModeConfig:
+  enabled: true
+  nodePools: ["system"] # la API exige al menos uno; `system` solo admite addons críticos (taint CriticalAddonsOnly), así que la app y la plataforma de dev corren en el NodePool spot-tm

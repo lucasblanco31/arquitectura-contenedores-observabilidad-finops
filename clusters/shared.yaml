@@ -1,0 +1,25 @@
+# Cluster SHARED · us-east-1 · EKS Auto Mode
+# eksctl create cluster -f clusters/shared.yaml
+# Versión fijada el 2026-11-04 (default de EKS, soporte estándar hasta 2027-11-30).
+apiVersion: eksctl.io/v1alpha5
+kind: ClusterConfig
+metadata:
+  name: shared
+  region: us-east-1
+  version: "1.37"
+  tags:
+    proyecto: charla-eks-finops
+    ambiente: shared
+
+vpc:
+  cidr: 10.0.0.0/16
+  nat:
+    gateway: Single # un solo NAT: es demo, no prod
+  clusterEndpoints:
+    publicAccess: true
+    privateAccess: true
+  publicAccessCIDRs: ["TU_IP_PUBLICA/32"] # tu IP pública (curl -s https://checkip.amazonaws.com); si cambia: eksctl utils update-cluster-endpoints / aws eks update-cluster-config
+
+autoModeConfig:
+  enabled: true
+  nodePools: ["general-purpose", "system"]

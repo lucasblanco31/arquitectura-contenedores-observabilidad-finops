@@ -1,0 +1,75 @@
+# kube-prometheus-stack en SHARED: Prometheus receptor de remote_write,
+# Grafana central y Alertmanager.
+# helm upgrade --install kps prometheus-community/kube-prometheus-stack \
+#   --kube-context shared -n observability --create-namespace \
+#   --version <VER> -f shared/values-kps.yaml --set grafana.adminPassword="$GRAFANA_PASS"
+#
+# Con fullnameOverride los Services se llaman kps-prometheus, kps-alertmanager
+# y (subchart) kps-grafana.
+fullnameOverride: kps
+
+# En EKS no se pueden scrapear estos componentes; en Auto Mode kube-proxy
+# tampoco corre como pod. Apagarlos evita targets "down" en los dashboards.
+kubeControllerManager:
+  enabled: false
+kubeScheduler:
+  enabled: false
+kubeEtcd:
+  enabled: false
+kubeProxy:
+  enabled: false
+
+prometheus-node-exporter:
+  tolerations:
+    - operator: Exists # también en los nodos del NodePool system (taint CriticalAddonsOnly)
+
+prometheus:
+  prometheusSpec:
+    enableRemoteWriteReceiver: true # acepta el remote_write del Prometheus de dev
+    externalLabels:
+      cluster: shared
+    retention: 3d
+    resources:
+      requests:
+        cpu: 500m
+        memory: 2Gi
+      limits:
+        memory: 3Gi
+    # Sin storageSpec: emptyDir. Los datos se pierden si el pod se reinicia;
+    # aceptable para una demo de dos días.
+    serviceMonitorSelectorNilUsesHelmValues: false
+    podMonitorSelectorNilUsesHelmValues: false
+  service:
+    # NLB interno creado por Auto Mode; solo alcanzable desde la VPC de dev por el peering.
+    type: LoadBalancer
+    annotations:
+      service.beta.kubernetes.io/aws-load-balancer-scheme: internal
+      service.beta.kubernetes.io/aws-load-balancer-nlb-target-type: ip
+
+alertmanager:
+  enabled: true
+
+grafana:
+  enabled: true
+  # adminPassword se pasa por --set desde una variable de entorno; nunca en este archivo.
+  defaultDashboardsEnabled: true
+  sidecar:
+    dashboards:
+      enabled: true
+      label: grafana_dashboard
+      multicluster:
+        global:
+          enabled: true # variable $cluster en los dashboards incluidos
+    datasources:
+      uid: prometheus
+  additionalDataSources:
+    - name: Loki
+      type: loki
+      uid: loki
+      access: proxy
+      url: http://loki-gateway.observability.svc:3100
+      isDefault: false
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi

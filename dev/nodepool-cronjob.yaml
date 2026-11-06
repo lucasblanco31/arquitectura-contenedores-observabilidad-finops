@@ -1,0 +1,44 @@
+# NodePool para los Jobs de prender: cuando dev está apagado no queda ningún nodo
+# donde correr, así que el Job de prender necesita un pool propio. Lleva un taint
+# que solo tolera ese Job; mientras no hay Jobs no tiene nodos y no cuesta.
+# kubectl --context dev apply -f dev/nodepool-cronjob.yaml
+apiVersion: karpenter.sh/v1
+kind: NodePool
+metadata:
+  name: cronjob
+spec:
+  weight: 10 # spot-tm tiene 100: para pods normales Auto Mode prefiere spot-tm
+  template:
+    metadata:
+      labels:
+        charla/nodepool: cronjob
+    spec:
+      nodeClassRef:
+        group: eks.amazonaws.com
+        kind: NodeClass
+        name: default
+      taints:
+        - key: cronjob
+          value: "true"
+          effect: NoSchedule # solo entra quien lo tolera: el Job de prender
+      requirements:
+        - key: karpenter.sh/capacity-type
+          operator: In
+          values: ["spot"]
+        - key: eks.amazonaws.com/instance-category
+          operator: In
+          values: ["t", "m", "c"]
+        - key: kubernetes.io/arch
+          operator: In
+          values: ["arm64", "amd64"]
+        - key: eks.amazonaws.com/instance-generation
+          operator: Gt
+          values: ["4"]
+        - key: eks.amazonaws.com/instance-cpu
+          operator: In
+          values: ["2"] # lo más chico que haya
+  disruption:
+    consolidationPolicy: WhenEmpty
+    consolidateAfter: 30s # el Job dura segundos; el nodo se va enseguida
+  limits:
+    cpu: "4"

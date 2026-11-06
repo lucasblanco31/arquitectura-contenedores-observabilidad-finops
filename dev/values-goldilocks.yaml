@@ -1,0 +1,24 @@
+# Goldilocks en DEV: crea un VPA en modo Off por workload de los namespaces
+# etiquetados y muestra la recomendación en su dashboard. Nunca toca los pods.
+# Requiere el VPA recommender (chart fairwinds-stable/vpa, ver README, paso 6).
+# helm upgrade --install goldilocks fairwinds-stable/goldilocks --kube-context dev \
+#   -n goldilocks --version <VER> -f dev/values-goldilocks.yaml
+# Habilitar un namespace: kubectl label ns demo goldilocks.fairwinds.com/enabled=true
+controller:
+  enabled: true
+  resources:
+    requests:
+      cpu: 25m
+      memory: 64Mi
+
+dashboard:
+  enabled: true
+  replicaCount: 1
+  service:
+    type: ClusterIP
+    port: 80
+  resources:
+    requests:
+      cpu: 25m
+      memory: 64Mi
+  # port-forward: kubectl --context dev -n goldilocks port-forward svc/goldilocks-dashboard 8081:80

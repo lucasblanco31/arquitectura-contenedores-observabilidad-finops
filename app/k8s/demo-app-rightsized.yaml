@@ -1,0 +1,57 @@
+# demo-app · movimiento 1: requests ajustados a lo que recomienda Goldilocks.
+# Los valores de abajo son el punto de partida esperado para una app Node ociosa;
+# REEMPLAZARLOS por la recomendación real del dashboard de Goldilocks antes de la demo
+# (kubectl --context dev -n goldilocks port-forward svc/goldilocks-dashboard 8081:80).
+# Regla práctica de la charla: CPU al p50 de uso, memoria al p95 + margen,
+# limit de memoria sí, limit de CPU no.
+#   sed "s/ACCOUNT_PLACEHOLDER/$ACCOUNT/" app/k8s/demo-app-rightsized.yaml | kubectl --context dev apply -f -
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: demo-app
+  namespace: demo
+  labels:
+    app: demo-app
+spec:
+  replicas: 4
+  selector:
+    matchLabels:
+      app: demo-app
+  template:
+    metadata:
+      labels:
+        app: demo-app
+    spec:
+      terminationGracePeriodSeconds: 10
+      nodeSelector:
+        karpenter.sh/nodepool: spot-tm # Spot es la base de dev, igual que en demo-app.yaml
+      containers:
+        - name: demo-app
+          image: ACCOUNT_PLACEHOLDER.dkr.ecr.us-east-2.amazonaws.com/demo-app:1.1.0
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: PORT
+              value: "8080"
+            - name: SELF_URL
+              value: http://demo-app.demo.svc:80
+          resources:
+            requests:
+              cpu: 50m # [GOLDILOCKS]
+              memory: 128Mi # [GOLDILOCKS]
+            limits:
+              memory: 256Mi # [GOLDILOCKS] · con este limit, "Fuga de memoria" termina en OOMKill
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 2
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 3

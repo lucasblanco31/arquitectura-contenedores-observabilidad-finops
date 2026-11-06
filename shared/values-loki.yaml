@@ -1,0 +1,92 @@
+# Loki en SHARED: single binary, chunks e índice en S3, permisos por EKS Pod Identity.
+# helm upgrade --install loki grafana/loki --kube-context shared -n observability \
+#   --version <VER> -f shared/values-loki.yaml \
+#   --set loki.storage.bucketNames.chunks=$BUCKET --set loki.storage.bucketNames.ruler=$BUCKET --set loki.storage.bucketNames.admin=$BUCKET
+deploymentMode: SingleBinary
+
+loki:
+  auth_enabled: false
+  commonConfig:
+    replication_factor: 1
+  storage:
+    type: s3
+    bucketNames:
+      chunks: "[BUCKET: se pasa por --set]"
+      ruler: "[BUCKET: se pasa por --set]"
+      admin: "[BUCKET: se pasa por --set]"
+    s3:
+      region: us-east-1
+      # Sin accessKeyId/secretAccessKey: las credenciales llegan por Pod Identity.
+  schemaConfig:
+    configs:
+      - from: "2024-04-01"
+        store: tsdb
+        object_store: s3
+        schema: v13
+        index:
+          prefix: index_
+          period: 24h
+  limits_config:
+    retention_period: 72h
+    ingestion_rate_mb: 20
+    ingestion_burst_size_mb: 40
+  compactor:
+    retention_enabled: true
+    delete_request_store: s3
+
+# La ServiceAccount `loki` es la que tiene la asociación de Pod Identity (README, paso 4).
+serviceAccount:
+  create: true
+  name: loki
+
+singleBinary:
+  replicas: 1
+  persistence:
+    enabled: false # el estado durable está en S3
+  # El chart 7.x no monta nada en /var/loki sin persistencia y el compactor falla
+  # con "read-only file system": emptyDir explícito.
+  extraVolumes:
+    - name: data
+      emptyDir: {}
+  extraVolumeMounts:
+    - name: data
+      mountPath: /var/loki
+  resources:
+    requests:
+      cpu: 200m
+      memory: 512Mi
+    limits:
+      memory: 1Gi
+
+# Modos que no se usan en SingleBinary
+read:
+  replicas: 0
+write:
+  replicas: 0
+backend:
+  replicas: 0
+
+chunksCache:
+  enabled: false
+resultsCache:
+  enabled: false
+
+gateway:
+  enabled: true
+  service:
+    # NLB interno creado por Auto Mode. Alloy en dev escribe a http://<NLB>:3100/loki/api/v1/push
+    type: LoadBalancer
+    port: 3100
+    annotations:
+      service.beta.kubernetes.io/aws-load-balancer-scheme: internal
+      service.beta.kubernetes.io/aws-load-balancer-nlb-target-type: ip
+
+test:
+  enabled: false
+lokiCanary:
+  enabled: false
+monitoring:
+  selfMonitoring:
+    enabled: false
+    grafanaAgent:
+      installOperator: false

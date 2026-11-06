@@ -1,0 +1,43 @@
+# Grafana expuesto por un ALB que crea EKS Auto Mode (sin instalar controlador).
+# Acceso restringido a la IP pública de quien presenta vía inboundCIDRs (security group del ALB).
+# HTTP sin TLS: es una demo de un día, con contraseña fuerte y una sola IP permitida.
+# Doc: https://docs.aws.amazon.com/eks/latest/userguide/auto-configure-alb.html
+# kubectl --context shared apply -f shared/grafana-ingress.yaml
+apiVersion: eks.amazonaws.com/v1
+kind: IngressClassParams
+metadata:
+  name: alb-presentador
+spec:
+  scheme: internet-facing
+  targetType: ip
+  inboundCIDRs:
+    - TU_IP_PUBLICA/32 # tu IP pública; actualizar si cambia
+---
+apiVersion: networking.k8s.io/v1
+kind: IngressClass
+metadata:
+  name: alb-presentador
+spec:
+  controller: eks.amazonaws.com/alb
+  parameters:
+    apiGroup: eks.amazonaws.com
+    kind: IngressClassParams
+    name: alb-presentador
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: grafana
+  namespace: observability
+spec:
+  ingressClassName: alb-presentador
+  rules:
+    - http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: kps-grafana
+                port:
+                  number: 80

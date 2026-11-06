@@ -1,0 +1,80 @@
+# Grafana Alloy en DEV: DaemonSet que lee los logs de todos los pods por la API
+# de Kubernetes y los empuja al Loki de shared, con etiqueta cluster=dev.
+# helm upgrade --install alloy grafana/alloy --kube-context dev -n observability \
+#   --version <VER> -f dev/values-alloy.yaml
+# Antes de aplicar: reemplazar LOKI_NLB_PLACEHOLDER por el DNS del NLB de loki-gateway
+#   sed "s/LOKI_NLB_PLACEHOLDER/$LOKI_NLB/" dev/values-alloy.yaml > /tmp/values-alloy.yaml
+controller:
+  type: daemonset
+  tolerations:
+    - operator: Exists # también en los nodos del NodePool system
+
+alloy:
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      memory: 256Mi
+  configMap:
+    create: true
+    content: |
+      // Descubre todos los pods del cluster
+      discovery.kubernetes "pods" {
+        role = "pod"
+      }
+
+      // Etiquetas de bajo cardinalidad: namespace, pod, container, app, node
+      discovery.relabel "pods" {
+        targets = discovery.kubernetes.pods.targets
+
+        rule {
+          source_labels = ["__meta_kubernetes_namespace"]
+          target_label  = "namespace"
+        }
+        rule {
+          source_labels = ["__meta_kubernetes_pod_name"]
+          target_label  = "pod"
+        }
+        rule {
+          source_labels = ["__meta_kubernetes_pod_container_name"]
+          target_label  = "container"
+        }
+        rule {
+          source_labels = ["__meta_kubernetes_pod_label_app_kubernetes_io_name", "__meta_kubernetes_pod_label_app"]
+          separator     = ""
+          regex         = "(.+)"
+          target_label  = "app"
+        }
+        rule {
+          source_labels = ["__meta_kubernetes_pod_node_name"]
+          target_label  = "node"
+        }
+      }
+
+      // Lee los logs vía kubelet/API (no hace falta montar /var/log del host)
+      loki.source.kubernetes "pods" {
+        targets    = discovery.relabel.pods.output
+        forward_to = [loki.process.json.receiver]
+      }
+
+      // Si la línea es JSON con campo "level", lo promueve a etiqueta
+      loki.process "json" {
+        stage.json {
+          expressions = { level = "level" }
+        }
+        stage.labels {
+          values = { level = "" }
+        }
+        forward_to = [loki.write.shared.receiver]
+      }
+
+      // Loki de shared, por el NLB interno a través del peering
+      loki.write "shared" {
+        endpoint {
+          url = "http://LOKI_NLB_PLACEHOLDER:3100/loki/api/v1/push"
+        }
+        external_labels = {
+          cluster = "dev",
+        }
+      }

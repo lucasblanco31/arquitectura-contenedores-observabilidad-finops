@@ -1,0 +1,203 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Panel de caos · demo-app</title>
+    <style>
+      :root {
+        --ink: #090d15;
+        --surface: #101828;
+        --line: #1c2942;
+        --blue: #4a86e6;
+        --amber: #e6aa49;
+        --green: #3ecf8e;
+        --red: #e65a5a;
+        --text: #e9eef7;
+        --muted: #8593a9;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        background: radial-gradient(circle at 22% 12%, #101c30 0%, var(--ink) 60%);
+        color: var(--text);
+        font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+        min-height: 100vh;
+        padding: 24px 16px;
+      }
+      main { max-width: 980px; margin: 0 auto; }
+      h1 { font-size: 1.6rem; margin: 0 0 4px; }
+      .sub { color: var(--muted); margin: 0 0 20px; font-size: 0.95rem; }
+      .sub code { color: var(--blue); font-family: ui-monospace, monospace; }
+      .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; }
+      .card {
+        background: rgba(16, 24, 40, 0.8);
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        padding: 14px 16px;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+      .card h2 { font-size: 1rem; margin: 0; }
+      .card p { margin: 0; color: var(--muted); font-size: 0.85rem; line-height: 1.35; }
+      .card .ver { font-family: ui-monospace, monospace; font-size: 0.75rem; color: var(--blue); }
+      .card .log { font-family: ui-monospace, monospace; font-size: 0.72rem; color: var(--muted); line-height: 1.4; }
+      .card .log b { color: var(--amber, #e6aa49); font-weight: 600; }
+      .card .log i { color: #e6655a; font-style: normal; }
+      button {
+        margin-top: auto;
+        background: var(--blue);
+        color: #fff;
+        border: 0;
+        border-radius: 8px;
+        padding: 10px 14px;
+        font-size: 0.95rem;
+        font-weight: 600;
+        cursor: pointer;
+      }
+      button:hover { filter: brightness(1.1); }
+      button.warn { background: var(--amber); color: #090d15; }
+      button.danger { background: var(--red); }
+      button:disabled { opacity: 0.5; cursor: wait; }
+      .count { font-family: ui-monospace, monospace; font-size: 0.8rem; color: var(--green); }
+      #estado {
+        margin-top: 18px;
+        background: rgba(16, 24, 40, 0.8);
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        padding: 12px 16px;
+        font-family: ui-monospace, monospace;
+        font-size: 0.85rem;
+        min-height: 3em;
+        white-space: pre-wrap;
+      }
+      .ok { color: var(--green); }
+      .err { color: var(--red); }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Panel de caos</h1>
+      <p class="sub">
+        Cada botón le pide algo a la API de <code>demo-app</code>. Lo que pasa se ve en Grafana,
+        en el cluster <code>shared</code>. Réplica que atiende: <code id="pod">…</code>
+      </p>
+
+      <div class="grid">
+        <div class="card">
+          <h2>Tráfico normal</h2>
+          <p>50 requests por segundo durante 60 s, repartidas entre todas las réplicas.</p>
+          <span class="ver">http_requests_total · latencia p95</span>
+          <span class="log">en Loki: <b>route=/api/ok</b> · info · msg="request" · status 200</span>
+          <span class="count" data-count="load-ok"></span>
+          <button data-post="/api/load?mode=ok&rps=50&seconds=60" data-key="load-ok">Generar tráfico</button>
+        </div>
+
+        <div class="card">
+          <h2>Errores 5xx</h2>
+          <p>Mismo tráfico, pero 3 de cada 10 respuestas son 500 y se loguean como <code>level=error</code>.</p>
+          <span class="ver">tasa de error · Loki: level="error"</span>
+          <span class="log">en Loki: <b>route=/api/error</b> · <i>error</i> · msg="request" · status 500 (3 de cada 10)</span>
+          <span class="count" data-count="load-error"></span>
+          <button class="warn" data-post="/api/load?mode=error&rps=50&seconds=60" data-key="load-error">Romper el 30 %</button>
+        </div>
+
+        <div class="card">
+          <h2>Latencia alta</h2>
+          <p>Respuestas de 1 a 3 segundos. El histograma se corre a la derecha.</p>
+          <span class="ver">http_request_duration_seconds</span>
+          <span class="log">en Loki: <b>route=/api/slow</b> · info · msg="request" · latency_ms 1000 a 3000</span>
+          <span class="count" data-count="load-slow"></span>
+          <button class="warn" data-post="/api/load?mode=slow&rps=20&seconds=60" data-key="load-slow">Poner lento</button>
+        </div>
+
+        <div class="card">
+          <h2>Quemar CPU</h2>
+          <p>Esta réplica usa ~80 % de un core durante 60 s. Compará uso contra request.</p>
+          <span class="ver">container_cpu_usage_seconds_total · Goldilocks</span>
+          <span class="log">en Loki: <b>route=/api/cpu</b> · warn · msg="quemando cpu"</span>
+          <span class="count" data-count="cpu"></span>
+          <button class="warn" data-post="/api/cpu?seconds=60" data-key="cpu">Quemar CPU</button>
+        </div>
+
+        <div class="card">
+          <h2>Fuga de memoria</h2>
+          <p>Retiene 20 MiB por segundo durante 30 s. Con un limit chico, OOMKill.</p>
+          <span class="ver">container_memory_working_set_bytes</span>
+          <span class="log">en Loki: <b>route=/api/mem</b> · warn · msg="fuga de memoria simulada"</span>
+          <span class="count" data-count="mem"></span>
+          <button class="warn" data-post="/api/mem?mb=20&seconds=30" data-key="mem">Perder memoria</button>
+          <button data-post="/api/mem/release" data-key="mem-release" style="margin-top: 6px">Liberar</button>
+        </div>
+
+        <div class="card">
+          <h2>Ráfaga de logs</h2>
+          <p>5 000 líneas JSON en 10 s, con niveles mezclados.</p>
+          <span class="ver">Loki: ingesta · {app="demo-app"}</span>
+          <span class="log">en Loki: msg="<b>ráfaga de logs</b>" · 5 000 líneas: 1 de cada 50 <i>error</i>, 1 de cada 10 warn</span>
+          <span class="count" data-count="logs"></span>
+          <button data-post="/api/logs?lines=5000" data-key="logs">Inundar Loki</button>
+        </div>
+
+        <div class="card">
+          <h2>Tirar un pod</h2>
+          <p>La réplica que atiende sale con código 1. Kubernetes la reinicia.</p>
+          <span class="ver">kube_pod_container_status_restarts_total</span>
+          <span class="log">en Loki: <i>error</i> · msg="<b>crash a pedido</b>" y luego "demo-app escuchando" al reiniciar</span>
+          <span class="count" data-count="crash"></span>
+          <button class="danger" data-post="/api/crash" data-key="crash">Matar esta réplica</button>
+        </div>
+
+        <div class="card">
+          <h2>Parar todo</h2>
+          <p>Detiene el generador de carga de esta réplica.</p>
+          <span class="ver">demo_load_active</span>
+          <span class="log">en Loki: info · msg="<b>carga detenida a pedido</b>"</span>
+          <span class="count" data-count="stop"></span>
+          <button data-post="/api/load/stop" data-key="stop">Detener carga</button>
+        </div>
+      </div>
+
+      <div id="estado">listo.</div>
+    </main>
+
+    <script>
+      const estado = document.getElementById("estado");
+      const counts = {};
+      const show = (msg, ok = true) => {
+        estado.textContent = `${new Date().toLocaleTimeString()}  ${msg}`;
+        estado.className = ok ? "ok" : "err";
+      };
+
+      fetch("/api/whoami").then((r) => r.json()).then((d) => (document.getElementById("pod").textContent = d.pod)).catch(() => {});
+
+      document.querySelectorAll("button[data-post]").forEach((btn) => {
+        btn.addEventListener("click", async () => {
+          const key = btn.dataset.key;
+          btn.disabled = true;
+          try {
+            const r = await fetch(btn.dataset.post, { method: "POST" });
+            const d = await r.json().catch(() => ({}));
+            counts[key] = (counts[key] || 0) + 1;
+            const c = document.querySelector(`[data-count="${key}"]`);
+            if (c) c.textContent = `× ${counts[key]}`;
+            show(`${btn.dataset.post} → ${r.status} ${JSON.stringify(d)}`, r.ok);
+          } catch (e) {
+            show(`${btn.dataset.post} → sin respuesta (${e.message}). Si tiraste el pod, es esperado.`, false);
+          } finally {
+            setTimeout(() => (btn.disabled = false), 800);
+          }
+        });
+      });
+
+      // estado del generador de carga cada 2 s
+      setInterval(async () => {
+        try {
+          const d = await fetch("/api/load/status").then((r) => r.json());
+          if (d.active) show(`carga ${d.mode} · ${d.rps} rps · quedan ${d.remaining_s}s · enviadas ${d.sent} · ok ${d.ok} · fallidas ${d.failed}`);
+        } catch {}
+      }, 2000);
+    </script>
+  </body>
+</html>
